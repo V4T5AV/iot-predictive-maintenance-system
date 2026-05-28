@@ -1,0 +1,37 @@
+from flask import Flask, request, jsonify
+from pyspark.sql import SparkSession
+from pyspark.ml import PipelineModel
+import os
+
+app = Flask(__name__)
+
+spark = SparkSession.builder \
+    .appName('ScoringService') \
+    .master('local[2]') \
+    .config('spark.driver.memory', '1g') \
+    .getOrCreate()
+spark.sparkContext.setLogLevel('ERROR')
+
+MODEL_PATH = os.path.join(os.path.dirname(__file__), '../spark-ml/models/failure_rf_model')
+model = PipelineModel.load(MODEL_PATH)
+print('Model loaded successfully')
+
+@app.route('/predict', methods=['POST'])
+def predict():
+    data = request.get_json()
+    df = spark.createDataFrame([data])
+    preds = model.transform(df)
+    row = preds.select('machine_id','probability','prediction').first()
+    failure_prob = float(row['probability'][1])
+    return jsonify({
+        'machine_id':   data['machine_id'],
+        'failure_prob': round(failure_prob, 4),
+        'alert':        failure_prob > 0.75
+    })
+
+@app.route('/health')
+def health():
+    return jsonify({'status': 'ok'})
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5001, debug=False)
